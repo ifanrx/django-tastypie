@@ -6,7 +6,7 @@ django-tastypie
     :target: https://django-tastypie.readthedocs.io/
     :alt: Docs
 
-.. image:: https://travis-ci.org/django-tastypie/django-tastypie.svg
+.. image:: https://travis-ci.org/django-tastypie/django-tastypie.svg?branch=master
     :target: https://travis-ci.org/django-tastypie/django-tastypie
     :alt: CI
 
@@ -18,13 +18,13 @@ django-tastypie
     :target: https://pypi.python.org/pypi/django-tastypie
     :alt: Version
 
-.. image:: https://img.shields.io/pypi/dm/django-tastypie.svg
+.. image:: https://pypi-badges.global.ssl.fastly.net/svg?package=django-tastypie&timeframe=monthly
     :target: https://pypi.python.org/pypi/django-tastypie
     :alt: Downloads
 
 Creating delicious APIs for Django apps since 2010.
 
-Currently in beta (v0.13.3) but being used actively in production on several
+Currently in beta (v0.14.2) but being used actively in production on several
 sites.
 
 
@@ -35,7 +35,7 @@ Core
 ----
 
 * Python 2.7+ or Python 3.4+
-* Django 1.7 through Django 1.9
+* Django - 1.11 (LTS), 2.0 (LTS) or 2.1 - the last two LTS and the last incremental release are supported.
 * dateutil (http://labix.org/python-dateutil) >= 2.1
 
 Format Support
@@ -43,7 +43,7 @@ Format Support
 
 * XML: lxml 3 (http://lxml.de/) and defusedxml (https://pypi.python.org/pypi/defusedxml)
 * YAML: pyyaml (http://pyyaml.org/)
-* binary plist: biplist (http://explorapp.com/biplist/)
+* binary plist: biplist (https://bitbucket.org/wooster/biplist)
 
 Optional
 --------

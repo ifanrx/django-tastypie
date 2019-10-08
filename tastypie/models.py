@@ -15,7 +15,7 @@ from tastypie.utils import now
 class ApiAccess(models.Model):
     """A simple model for use with the ``CacheDBThrottle`` behaviors."""
     identifier = models.CharField(max_length=255)
-    url = models.CharField(max_length=255, blank=True, default='')
+    url = models.TextField(blank=True, default='')
     request_method = models.CharField(max_length=10, blank=True, default='')
     accessed = models.PositiveIntegerField()
 
@@ -33,7 +33,7 @@ if 'django.contrib.auth' in settings.INSTALLED_APPS:
 
     @python_2_unicode_compatible
     class ApiKey(models.Model):
-        user = models.OneToOneField(AUTH_USER_MODEL, related_name='api_key')
+        user = models.OneToOneField(AUTH_USER_MODEL, related_name='api_key', on_delete=models.CASCADE)
         key = models.CharField(max_length=128, blank=True, default='', db_index=True)
         created = models.DateTimeField(default=now)
 

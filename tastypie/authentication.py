@@ -13,7 +13,9 @@ from django.middleware.csrf import _sanitize_token, constant_time_compare
 from django.utils.six.moves.urllib.parse import urlparse
 from django.utils.translation import ugettext as _
 
-from tastypie.compat import get_user_model, get_username_field, unsalt_token
+from tastypie.compat import (
+    get_user_model, get_username_field, unsalt_token, is_authenticated
+)
 from tastypie.http import HttpUnauthorized
 
 try:
@@ -74,7 +76,7 @@ class Authentication(object):
 
         try:
             auth_type, data = authorization.split(' ', 1)
-        except:
+        except ValueError:
             raise ValueError('Authorization header must have a space separating auth_type and data.')
 
         if auth_type.lower() != self.auth_type:
@@ -301,11 +303,12 @@ class SessionAuthentication(Authentication):
         # wrong.
         # We also can't risk accessing ``request.POST``, which will break with
         # the serialized bodies.
+
         if request.method in ('GET', 'HEAD', 'OPTIONS', 'TRACE'):
-            return request.user.is_authenticated()
+            return is_authenticated(request.user)
 
         if getattr(request, '_dont_enforce_csrf_checks', False):
-            return request.user.is_authenticated()
+            return is_authenticated(request.user)
 
         csrf_token = _sanitize_token(request.COOKIES.get(settings.CSRF_COOKIE_NAME, ''))
 
@@ -327,7 +330,7 @@ class SessionAuthentication(Authentication):
                                      unsalt_token(csrf_token)):
             return False
 
-        return request.user.is_authenticated()
+        return is_authenticated(request.user)
 
     def get_identifier(self, request):
         """
@@ -525,9 +528,9 @@ class OAuthAuthentication(Authentication):
         according to OAuth spec) or fall back to ``GET/POST``.
         """
         auth_params = request.META.get("HTTP_AUTHORIZATION", [])
-        return (self.is_in(auth_params) or
-                self.is_in(request.POST) or
-                self.is_in(request.GET))
+        return (self.is_in(auth_params)
+                or self.is_in(request.POST)
+                or self.is_in(request.GET))
 
     def validate_token(self, request, consumer, token):
         oauth_server, oauth_request = oauth_provider.utils.initialize_server_request(request)

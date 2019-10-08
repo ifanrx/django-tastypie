@@ -35,7 +35,7 @@ except ImportError:
     biplist = None
 
 
-XML_ENCODING = re.compile('<\?xml.*?\?>', re.IGNORECASE)
+XML_ENCODING = re.compile(r'<\?xml.*?\?>', re.IGNORECASE)
 
 
 # Ugh & blah.
@@ -119,7 +119,7 @@ class Serializer(object):
         * jsonp (Disabled by default)
         * xml
         * yaml
-        * plist (see http://explorapp.com/biplist/)
+        * plist (see https://bitbucket.org/wooster/biplist)
 
     It was designed to make changing behavior easy, either by overridding the
     various format methods (i.e. ``to_json``), by changing the
@@ -242,8 +242,8 @@ class Serializer(object):
         if self.datetime_formatting == 'iso-8601-strict':
             # Remove microseconds to strictly adhere to iso-8601
             data = (
-                datetime.datetime.combine(datetime.date(1, 1, 1), data) -
-                datetime.timedelta(microseconds=data.microsecond)
+                datetime.datetime.combine(datetime.date(1, 1, 1), data)
+                - datetime.timedelta(microseconds=data.microsecond)
             ).time()
 
         return data.isoformat()

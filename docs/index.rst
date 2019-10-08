@@ -84,7 +84,7 @@ Core
 ----
 
 * Python 2.7+ or Python 3.4+
-* Django 1.7 through Django 1.9
+* Django 1.11 (LTS releases) or Django 2.0+ (requires Python 3.4+)
 * dateutil (http://labix.org/python-dateutil) >= 2.1
 
 Format Support
@@ -92,7 +92,7 @@ Format Support
 
 * XML: lxml 3 (http://lxml.de/) and defusedxml (https://pypi.python.org/pypi/defusedxml)
 * YAML: pyyaml (http://pyyaml.org/)
-* binary plist: biplist (http://explorapp.com/biplist/)
+* binary plist: biplist (https://bitbucket.org/wooster/biplist)
 
 Optional
 --------

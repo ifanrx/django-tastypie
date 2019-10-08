@@ -14,11 +14,14 @@ from unittest import skipIf
 
 import django
 from django import forms
-from django.contrib.auth.models import User
+from django.contrib.auth import get_user_model
 from django.core.cache import cache
-from django.core.exceptions import FieldError, MultipleObjectsReturned, ObjectDoesNotExist
+from django.core.exceptions import FieldError, MultipleObjectsReturned, ObjectDoesNotExist, ImproperlyConfigured
 from django.core import mail
-from django.core.urlresolvers import reverse
+try:
+    from django.urls import reverse
+except ImportError:
+    from django.core.urlresolvers import reverse
 from django.http import HttpRequest, QueryDict, Http404
 from django.test import TestCase
 from django.test.utils import override_settings
@@ -34,6 +37,7 @@ from tastypie.exceptions import (
     UnsupportedSerializationFormat, UnsupportedDeserializationFormat,
 )
 from tastypie import fields, http
+from tastypie.compat import is_authenticated
 from tastypie.paginator import Paginator
 from tastypie.resources import (
     ALL, ALL_WITH_RELATIONS, convert_post_to_put, convert_post_to_patch,
@@ -50,6 +54,8 @@ from core.models import (
 )
 from core.tests.mocks import MockRequest
 from core.utils import adjust_schema, SimpleHandler
+
+User = get_user_model()
 
 
 class CustomSerializer(Serializer):
@@ -580,6 +586,28 @@ class ResourceTestCase(TestCase):
         self.assertEqual(hydrated.obj.date_joined, None)
         self.assertEqual(hydrated.obj.parent, None)
 
+    def test_full_hydrate__does_not_overwrite_related_value_if_not_put(self):
+        class RelatedBasicResource(BasicResource):
+            parent = fields.ToOneField(BasicResource, 'parent', null=True, blank=True)
+        basic = RelatedBasicResource()
+        basic_bundle_1 = Bundle(data={
+            'name': 'Daniel',
+            'date_joined': None,
+        })
+        basic_bundle_1.obj = Mock()
+        basic_bundle_1.obj.date_joined = aware_datetime(2010, 2, 15, 12, 0, 0)
+        basic_bundle_1.obj.view_count = 3
+        basic_bundle_1.obj.parent = Mock()
+
+        self.assertNotEqual(basic_bundle_1.obj.view_count, None)
+        self.assertNotEqual(basic_bundle_1.obj.parent, None)
+
+        # Now load up the data.
+        hydrated = basic.full_hydrate(basic_bundle_1)
+
+        self.assertNotEqual(hydrated.obj.view_count, None)
+        self.assertNotEqual(hydrated.obj.parent, None)
+
     def test_obj_get_list(self):
         basic = BasicResource()
         bundle = Bundle()
@@ -821,7 +849,7 @@ class ResourceTestCase(TestCase):
         # Allowed (single).
         try:
             basic.is_authenticated(request)
-        except:
+        except ImmediateHttpResponse:
             self.fail()
 
     def test_create_response(self):
@@ -1120,6 +1148,24 @@ class RequiredFKNoteResource(ModelResource):
         authorization = Authorization()
 
 
+class NoAttributeFKNoteResource(ModelResource):
+    editor = fields.ForeignKey(UserResource, None)
+
+    class Meta:
+        resource_name = 'noattrfknotes'
+        queryset = NoteWithEditor.objects.all()
+        authorization = Authorization()
+
+
+class FunctionAttributeFKNoteResource(ModelResource):
+    editor = fields.ForeignKey(UserResource, lambda bundle: User.objects.first(), null=True)
+
+    class Meta:
+        resource_name = 'fnattrfknotes'
+        queryset = NoteWithEditor.objects.all()
+        authorization = Authorization()
+
+
 class ThrottledNoteResource(NoteResource):
     class Meta:
         resource_name = 'throttlednotes'
@@ -1237,6 +1283,11 @@ class NullableRelatedNoteResource(AnotherRelatedNoteResource):
     subjects = fields.ManyToManyField(SubjectResource, 'subjects', null=True)
 
 
+class NullableBlankRelatedNoteResource(AnotherRelatedNoteResource):
+    author = fields.ForeignKey(UserResource, 'author', null=True, blank=True)
+    subjects = fields.ManyToManyField(SubjectResource, 'subjects', null=True)
+
+
 class NullableMediaBitResource(ModelResource):
     # The old (broke) way to allow ``note`` to be omitted, even though it's a required field.
     note = fields.ToOneField(NoteResource, 'note', null=True)
@@ -1288,7 +1339,7 @@ class TestOptionsResource(ModelResource):
 class PerUserAuthorization(Authorization):
     def read_list(self, object_list, bundle):
         if bundle.request and hasattr(bundle.request, 'user'):
-            if bundle.request.user.is_authenticated():
+            if is_authenticated(bundle.request.user):
                 object_list = object_list.filter(author=bundle.request.user)
             else:
                 object_list = object_list.none()
@@ -1404,6 +1455,7 @@ class ModelResourceTestCase(TestCase):
     fixtures = ['note_testdata.json']
 
     def setUp(self):
+        self.maxDiff = None
         super(ModelResourceTestCase, self).setUp()
         self.note_1 = Note.objects.get(pk=1)
         self.subject_1 = Subject.objects.create(
@@ -1488,6 +1540,12 @@ class ModelResourceTestCase(TestCase):
 
         resource_6 = CustomPageNoteResource()
         self.assertEqual(resource_6._meta.paginator_class, CustomPaginator)
+
+        # FK fields with non-string attributes
+        resource_7 = NoAttributeFKNoteResource()
+        self.assertEqual(len(resource_7.fields), 9)
+        resource_8 = FunctionAttributeFKNoteResource()
+        self.assertEqual(len(resource_8.fields), 9)
 
     def test_can_create(self):
         resource_1 = NoteResource()
@@ -1604,6 +1662,67 @@ class ModelResourceTestCase(TestCase):
         self.assertEqual(annr.fields['updated'].readonly, False)
         self.assertEqual(annr.fields['updated'].unique, False)
 
+    def test_invalid_model_resource(self):
+        """
+        Test error message regarding ModelResource lacking object_class and queryset.
+        """
+        with self.assertRaises(ImproperlyConfigured) as exception_context:
+            class InvalidNoteResource(ModelResource):
+                class Meta:
+                    resource_name = 'invalidnotes'
+        self.assertTrue('InvalidNoteResource' in str(exception_context.exception))
+
+    def test_abstract_model_resource(self):
+        """
+        Abstract ModelResource classes don't require object_class or queryset,
+        should skip populating fields and url details.
+        """
+        class AbstractNoteResource(ModelResource):
+            class Meta:
+                abstract = True
+
+        # AbstractNoteResource should have none of the dynamic attributes generated on declaration
+        for attr in ('object_class', 'queryset', 'fields', 'base_fields', 'absolute_url'):
+            self.assertFalse(getattr(AbstractNoteResource, attr, False),
+                             "AbstractNoteResource has non-falsey %s" % attr)
+
+    def test_abstract_resource_subclass_good(self):
+        """
+        Subclassing an abstract base resource should work as expected.
+        """
+        class AbstractNoteResource(ModelResource):
+            class Meta:
+                abstract = True
+
+        class ConcreteNoteResource(AbstractNoteResource):
+            class Meta:
+                queryset = Note.objects.all()
+        resource = ConcreteNoteResource(api_name='v1')
+        resource_fields = set(resource.fields.keys())
+        self.assertEqual(resource_fields, {
+            'updated',
+            'title',
+            'created',
+            'is_active',
+            'id',
+            'content',
+            'slug',
+            'resource_uri',
+        })
+
+    def test_abstract_resource_subclass_bad(self):
+        """
+        Subclassing an abstract base resource requires model_class or queryset.
+        """
+        class AbstractNoteResource(ModelResource):
+            class Meta:
+                abstract = True
+
+        with self.assertRaises(ImproperlyConfigured):
+            class ConcreteNoteResource(AbstractNoteResource):
+                class Meta:
+                    fields = []
+
     def test_fields__empty_list(self):
         class EmptyFieldsNoteResource(ModelResource):
             class Meta:
@@ -1622,7 +1741,7 @@ class ModelResourceTestCase(TestCase):
                 object_class = Note
 
         class EmptyFieldsNoteResource(FieldsNotSpecifiedNoteResource):
-            class Meta:
+            class Meta(FieldsNotSpecifiedNoteResource.Meta):
                 resource_name = 'emptyfieldsnotes'
                 fields = []
 
@@ -2007,12 +2126,39 @@ class ModelResourceTestCase(TestCase):
         resource_4 = AnotherSubjectResource()
         self.assertEqual(resource_4.build_filters(filters={'notes__user__startswith': 'Daniel'}), {'notes__author__startswith': 'Daniel'})
 
-        # Make sure that fields that don't have attributes can't be filtered on.
-        self.assertRaises(InvalidFilterError, resource_4.build_filters, filters={'notes__hello_world': 'News'})
-
         # Make sure build_filters works even on resources without queryset
         resource = NoQuerysetNoteResource()
         self.assertEqual(resource.build_filters(), {})
+
+    def test_build_filters_bad(self):
+        """
+        Test that a nonsensical filter fails validation.
+        """
+        resource = AnotherSubjectResource()
+        # Make sure that fields that don't have attributes can't be filtered on.
+        self.assertRaises(InvalidFilterError, resource.build_filters, filters={'notes__hello_world': 'News'})
+
+    def test_custom_build_filters(self):
+        """
+        A test derived from an example in the documentation (under Advanced Filtering).
+        Mostly exists to exercise build_filters - if this test fails due to underlying
+        framework changes, both this test and docs/resources.rst will need to be updated.
+        """
+        class MyResource(NoteResource):
+            def build_filters(self, filters=None, **kwargs):
+                if filters is None:
+                    filters = {}
+
+                orm_filters = super(MyResource, self).build_filters(filters, **kwargs)
+                if 'title' in filters:
+                    orm_filters['pk__in'] = Note.objects.filter(title=filters['title']).values_list('pk', flat=True)
+
+                return orm_filters
+
+        resource = MyResource()
+        first_note = Note.objects.first()
+        note = resource.obj_get(resource.build_bundle(), title=first_note.title)
+        self.assertEqual(note, first_note)
 
     def test_xss_regressions(self):
         # Make sure the body is JSON & the content-type is right.
@@ -2750,6 +2896,42 @@ class ModelResourceTestCase(TestCase):
         self.assertEqual(Note.objects.count(), 7)
         new_note = Note.objects.get(slug='cat-is-back')
         self.assertEqual(new_note.author, None)
+
+        # Test for issue 1489, if blank=True, PUT would clobber existing values if field not sent
+        new_note = Note.objects.create(slug='cat-is-back-again')
+        author = User.objects.create(username='johndoer')
+        new_note.author = author
+        new_note.save()
+        nullable_resource = NullableBlankRelatedNoteResource()
+        request = MockRequest()
+        request.GET = {'format': 'json'}
+        request.method = 'PUT'
+        request.set_body('{"content": "The cat is back. The dog coughed him up out back.", "created": "2016-12-12 14:10:00", "is_active": true, "slug": "cat-is-back-again", "title": "The Cat Is Back", "updated": "2016-12-12 14:10:00"}')
+
+        resp = nullable_resource.put_detail(request, pk=new_note.pk)
+        self.assertEqual(resp.status_code, 204)
+        self.assertNotIn('Content-Type', resp)
+        new_note = Note.objects.get(slug='cat-is-back-again')
+        self.assertEqual(new_note.author, author)
+
+    def test_put_detail_with_always_return(self):
+        # Check for issue #1576
+        resource = AlwaysDataNoteResource()
+        request = HttpRequest()
+        request.GET = {'format': 'json'}
+        resp = resource.get_detail(request, pk=1)
+        self.assertEqual(resp.status_code, 200)
+        resp = json.loads(resp.content.decode('utf-8'))
+
+        request = MockRequest()
+        request.GET = {'format': 'json'}
+        request.method = 'PUT'
+        request.set_body(json.dumps(resp))
+        putresp = resource.put_detail(request, pk=1)
+        self.assertEqual(putresp.status_code, 200)
+        data = json.loads(putresp.content.decode('utf-8'))
+
+        self.assertEqual(set(data.keys()), set(['title', 'slug', 'content', 'is_active', 'created', 'updated', 'id', 'resource_uri']))
 
     def test_put_detail_with_use_in(self):
         new_note = Note.objects.get(slug='another-post')
@@ -3787,7 +3969,8 @@ class ModelResourceTestCase(TestCase):
 
         self.assertEqual(schema['fields'], expected_schema['fields'])
 
-    def test_get_multiple(self):
+    @patch('tastypie.resources.ModelResource.obj_get_list', side_effect=NotImplementedError)
+    def test_get_multiple_without_queryset(self, obj_get_list_mock):
         resource = NoteResource()
         request = HttpRequest()
         request.GET = {'format': 'json'}
@@ -3806,6 +3989,31 @@ class ModelResourceTestCase(TestCase):
         self.assertEqual(resp.content.decode('utf-8'), '{"not_found": ["3"], "objects": [{"content": "The dog ate my cat today. He looks seriously uncomfortable.", "created": "2010-03-31T20:05:00", "id": 2, "is_active": true, "resource_uri": "/api/v1/notes/2/", "slug": "another-post", "title": "Another Post", "updated": "2010-03-31T20:05:00"}]}')
 
         resp = resource.get_multiple(request, pk_list='1;2;4;6')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.content.decode('utf-8'), '{"objects": [{"content": "This is my very first post using my shiny new API. Pretty sweet, huh?", "created": "2010-03-30T20:05:00", "id": 1, "is_active": true, "resource_uri": "/api/v1/notes/1/", "slug": "first-post", "title": "First Post!", "updated": "2010-03-30T20:05:00"}, {"content": "The dog ate my cat today. He looks seriously uncomfortable.", "created": "2010-03-31T20:05:00", "id": 2, "is_active": true, "resource_uri": "/api/v1/notes/2/", "slug": "another-post", "title": "Another Post", "updated": "2010-03-31T20:05:00"}, {"content": "My neighborhood\'s been kinda weird lately, especially after the lava flow took out the corner store. Granny can hardly outrun the magma with her walker.", "created": "2010-04-01T20:05:00", "id": 4, "is_active": true, "resource_uri": "/api/v1/notes/4/", "slug": "recent-volcanic-activity", "title": "Recent Volcanic Activity.", "updated": "2010-04-01T20:05:00"}, {"content": "Man, the second eruption came on fast. Granny didn\'t have a chance. On the upshot, I was able to save her walker and I got a cool shawl out of the deal!", "created": "2010-04-02T10:05:00", "id": 6, "is_active": true, "resource_uri": "/api/v1/notes/6/", "slug": "grannys-gone", "title": "Granny\'s Gone", "updated": "2010-04-02T10:05:00"}]}')
+
+    def test_get_multiple(self):
+        resource = NoteResource()
+        request = HttpRequest()
+        request.GET = {'format': 'json'}
+        request.method = 'GET'
+
+        resp = resource.get_multiple(request, pk_list='1')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.content.decode('utf-8'), '{"objects": [{"content": "This is my very first post using my shiny new API. Pretty sweet, huh?", "created": "2010-03-30T20:05:00", "id": 1, "is_active": true, "resource_uri": "/api/v1/notes/1/", "slug": "first-post", "title": "First Post!", "updated": "2010-03-30T20:05:00"}]}')
+
+        with self.assertNumQueries(1):
+            resp = resource.get_multiple(request, pk_list='1;2')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.content.decode('utf-8'), '{"objects": [{"content": "This is my very first post using my shiny new API. Pretty sweet, huh?", "created": "2010-03-30T20:05:00", "id": 1, "is_active": true, "resource_uri": "/api/v1/notes/1/", "slug": "first-post", "title": "First Post!", "updated": "2010-03-30T20:05:00"}, {"content": "The dog ate my cat today. He looks seriously uncomfortable.", "created": "2010-03-31T20:05:00", "id": 2, "is_active": true, "resource_uri": "/api/v1/notes/2/", "slug": "another-post", "title": "Another Post", "updated": "2010-03-31T20:05:00"}]}')
+
+        with self.assertNumQueries(1):
+            resp = resource.get_multiple(request, pk_list='2;3')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.content.decode('utf-8'), '{"not_found": ["3"], "objects": [{"content": "The dog ate my cat today. He looks seriously uncomfortable.", "created": "2010-03-31T20:05:00", "id": 2, "is_active": true, "resource_uri": "/api/v1/notes/2/", "slug": "another-post", "title": "Another Post", "updated": "2010-03-31T20:05:00"}]}')
+
+        with self.assertNumQueries(1):
+            resp = resource.get_multiple(request, pk_list='1;2;4;6')
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.content.decode('utf-8'), '{"objects": [{"content": "This is my very first post using my shiny new API. Pretty sweet, huh?", "created": "2010-03-30T20:05:00", "id": 1, "is_active": true, "resource_uri": "/api/v1/notes/1/", "slug": "first-post", "title": "First Post!", "updated": "2010-03-30T20:05:00"}, {"content": "The dog ate my cat today. He looks seriously uncomfortable.", "created": "2010-03-31T20:05:00", "id": 2, "is_active": true, "resource_uri": "/api/v1/notes/2/", "slug": "another-post", "title": "Another Post", "updated": "2010-03-31T20:05:00"}, {"content": "My neighborhood\'s been kinda weird lately, especially after the lava flow took out the corner store. Granny can hardly outrun the magma with her walker.", "created": "2010-04-01T20:05:00", "id": 4, "is_active": true, "resource_uri": "/api/v1/notes/4/", "slug": "recent-volcanic-activity", "title": "Recent Volcanic Activity.", "updated": "2010-04-01T20:05:00"}, {"content": "Man, the second eruption came on fast. Granny didn\'t have a chance. On the upshot, I was able to save her walker and I got a cool shawl out of the deal!", "created": "2010-04-02T10:05:00", "id": 6, "is_active": true, "resource_uri": "/api/v1/notes/6/", "slug": "grannys-gone", "title": "Granny\'s Gone", "updated": "2010-04-02T10:05:00"}]}')
 
@@ -4412,10 +4620,8 @@ class ModelResourceTestCase(TestCase):
         note = NoteResource()
         bundle = Bundle(data={})
 
-        try:
-            note.is_valid(bundle)
-        except:
-            self.fail("Stock 'is_valid' should pass without exception.")
+        note_is_valid = note.is_valid(bundle)
+        self.assertTrue(note_is_valid, "Stock 'is_valid' should return True.")
 
         # An actual form.
         class NoteForm(forms.Form):
