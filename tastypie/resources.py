@@ -61,6 +61,13 @@ from tastypie.utils.mime import determine_format, build_content_type
 from tastypie.validation import Validation
 from tastypie.compat import get_module_name, atomic_decorator
 
+QUERY_TERMS = {
+    'exact', 'iexact', 'contains', 'icontains', 'gt', 'gte', 'lt', 'lte', 'in',
+    'startswith', 'istartswith', 'endswith', 'iendswith', 'range', 'year',
+    'month', 'day', 'week_day', 'hour', 'minute', 'second', 'isnull', 'search',
+    'regex', 'iregex',
+}
+
 
 def sanitize(text):
     # We put the single quotes back, due to their frequent usage in exception
@@ -2076,6 +2083,10 @@ class BaseModelResource(Resource):
 
         qs_filters = {}
 
+        query_terms = QUERY_TERMS
+        if django.VERSION >= (1, 8) and GeometryField:
+            query_terms |= set(GeometryField.class_lookups.keys())
+
         for filter_expr, value in filters.items():
             filter_bits = filter_expr.split(LOOKUP_SEP)
             field_name = filter_bits.pop(0)
@@ -2085,16 +2096,6 @@ class BaseModelResource(Resource):
                 # It's not a field we know about. Move along citizen.
                 continue
 
-            # Validate filter types other than 'exact' that are supported by the field type
-            try:
-                django_field_name = self.fields[field_name].attribute
-                django_field = self._meta.object_class._meta.get_field(django_field_name)
-                if hasattr(django_field, 'field'):
-                    django_field = django_field.field  # related field
-            except FieldDoesNotExist:
-                raise InvalidFilterError("The '%s' field is not a valid field name" % field_name)
-
-            query_terms = django_field.get_lookups().keys()
             if len(filter_bits) and filter_bits[-1] in query_terms:
                 filter_type = filter_bits.pop()
 
