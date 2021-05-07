@@ -61,6 +61,14 @@ from tastypie.validation import Validation
 from tastypie.compat import get_module_name, atomic_decorator
 
 
+QUERY_TERMS = {
+    'exact', 'iexact', 'contains', 'icontains', 'gt', 'gte', 'lt', 'lte', 'in',
+    'startswith', 'istartswith', 'endswith', 'iendswith', 'range', 'year',
+    'month', 'day', 'week_day', 'hour', 'minute', 'second', 'isnull', 'search',
+    'regex', 'iregex',
+}
+
+
 def sanitize(text):
     # We put the single quotes back, due to their frequent usage in exception
     # messages.
@@ -2068,15 +2076,11 @@ class BaseModelResource(Resource):
         if field_name not in self.fields:
             raise InvalidFilterError("The '%s' field is not a valid field" % field_name)
 
-        try:
-            django_field_name = self.fields[field_name].attribute
-            django_field = self._meta.object_class._meta.get_field(django_field_name)
-            if hasattr(django_field, 'field'):
-                django_field = django_field.field  # related field
-        except FieldDoesNotExist:
-            raise InvalidFilterError("The '%s' field is not a valid field name" % field_name)
+        query_terms = QUERY_TERMS
+        if GeometryField:
+            query_terms |= set(GeometryField.class_lookups.keys())
 
-        return django_field.get_lookups().keys()
+        return query_terms
 
     def resolve_filter_type(self, field_name, filter_bits, default_filter_type=None):
         """ Helper to derive filter type from next segment in filter bits """
@@ -2283,6 +2287,7 @@ class BaseModelResource(Resource):
         lookup parameters that can find them in the DB
         """
         lookup_kwargs = {}
+        kwargs = deepcopy(kwargs)
 
         # Handle detail_uri_name specially
         if self._meta.detail_uri_name in kwargs:
