@@ -1,5 +1,3 @@
-from __future__ import unicode_literals
-
 import datetime
 from django.conf import settings
 from django.utils import timezone
@@ -17,6 +15,15 @@ def make_naive(value):
         default_tz = timezone.get_default_timezone()
         value = timezone.make_naive(value, default_tz)
     return value
+
+
+def make_naive_utc(value):
+    """
+    Translate a datetime to UTC, then strip TZ info; useful as a last step before creating the
+    Retry-After header.
+    """
+    utc_value = timezone.localtime(value, timezone.utc)
+    return timezone.make_naive(utc_value)
 
 
 def now():
