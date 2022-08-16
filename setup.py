@@ -12,12 +12,12 @@ from tastypie import __version__
 
 
 setup(
-    name='django-tastypie',
+    name='django-tastypie-ng',
     version=__version__,
     description='A flexible & capable API layer for Django.',
-    author='Daniel Lindsley',
-    author_email='daniel@toastdriven.com',
-    url='https://github.com/django-tastypie/django-tastypie',
+    author='ifanr',
+    author_email='ifanrx@ifanr.com',
+    url='https://github.com/ifanrx/django-tastypie',
     long_description=open('README.rst', 'r').read(),
     packages=[
         'tastypie',
@@ -40,6 +40,7 @@ setup(
     install_requires=[
         'python-mimeparse >= 0.1.4, != 1.5',
         'python-dateutil >= 1.5, != 2.0',
+        'Django>=3.2'
     ],
     tests_require=['mock', 'PyYAML', 'lxml', 'defusedxml'],
     classifiers=[

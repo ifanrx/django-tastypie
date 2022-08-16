@@ -62,6 +62,14 @@ from tastypie.validation import Validation
 from tastypie.compat import get_module_name, atomic_decorator
 
 
+QUERY_TERMS = {
+    'exact', 'iexact', 'contains', 'icontains', 'gt', 'gte', 'lt', 'lte', 'in',
+    'startswith', 'istartswith', 'endswith', 'iendswith', 'range', 'year',
+    'month', 'day', 'week_day', 'hour', 'minute', 'second', 'isnull', 'search',
+    'regex', 'iregex',
+}
+
+
 def sanitize(text):
     # We put the single quotes back, due to their frequent usage in exception
     # messages.
@@ -2010,7 +2018,7 @@ class BaseModelResource(Resource):
             raise InvalidFilterError("The '%s' field does not allow filtering." % field_name)
 
         # Check to see if it's an allowed lookup type.
-        if self._meta.filtering[field_name] not in (ALL, ALL_WITH_RELATIONS):
+        if filter_type != 'exact' and self._meta.filtering[field_name] not in (ALL, ALL_WITH_RELATIONS):
             # Must be an explicit whitelist.
             if filter_type not in self._meta.filtering[field_name]:
                 raise InvalidFilterError("'%s' is not an allowed filter on the '%s' field." % (filter_type, field_name))
@@ -2018,8 +2026,16 @@ class BaseModelResource(Resource):
         if self.fields[field_name].attribute is None:
             raise InvalidFilterError("The '%s' field has no 'attribute' for searching with." % field_name)
 
-        # Check to see if it's a relational lookup and if that's allowed.
-        if len(filter_bits):
+        if len(filter_bits) == 0:
+            # Only a field provided, match with provided filter type
+            return [self.fields[field_name].attribute] + [filter_type]
+
+        elif len(filter_bits) == 1 and filter_bits[0] in self.get_query_terms(field_name):
+            # Match with valid filter type (i.e. contains, startswith, Etc.)
+            return [self.fields[field_name].attribute] + filter_bits
+
+        else:
+            # Check to see if it's a relational lookup and if that's allowed.
             if not getattr(self.fields[field_name], 'is_related', False):
                 raise InvalidFilterError("The '%s' field does not support relations." % field_name)
 
@@ -2030,9 +2046,12 @@ class BaseModelResource(Resource):
             # if any. We should ensure that all along the way, we're allowed
             # to filter on that field by the related resource.
             related_resource = self.fields[field_name].get_related_resource(None)
-            return [self.fields[field_name].attribute] + related_resource.check_filtering(filter_bits[0], filter_type, filter_bits[1:])
 
-        return [self.fields[field_name].attribute]
+            next_field_name = filter_bits[0]
+            next_filter_bits = filter_bits[1:]
+            next_filter_type = related_resource.resolve_filter_type(next_field_name, next_filter_bits, filter_type)
+
+            return [self.fields[field_name].attribute] + related_resource.check_filtering(next_field_name, next_filter_type, next_filter_bits)
 
     def filter_value_to_python(self, value, field_name, filters, filter_expr,
             filter_type):
@@ -2053,6 +2072,31 @@ class BaseModelResource(Resource):
                 value = value.split(',')
 
         return value
+
+    def get_query_terms(self, field_name):
+        """ Helper to determine supported filter operations for a field """
+
+        if field_name not in self.fields:
+            raise InvalidFilterError("The '%s' field is not a valid field" % field_name)
+
+        query_terms = QUERY_TERMS
+        if GeometryField:
+            query_terms |= set(GeometryField.class_lookups.keys())
+
+        return query_terms
+
+    def resolve_filter_type(self, field_name, filter_bits, default_filter_type=None):
+        """ Helper to derive filter type from next segment in filter bits """
+
+        if not filter_bits:
+            # No filter type to resolve, use default
+            return default_filter_type
+        elif filter_bits[0] not in self.get_query_terms(field_name):
+            # Not valid, maybe related field, use default
+            return default_filter_type
+        else:
+            # A valid filter type
+            return filter_bits[0]
 
     def build_filters(self, filters=None, ignore_bad_filters=False):
         """
@@ -2081,26 +2125,13 @@ class BaseModelResource(Resource):
         for filter_expr, value in filters.items():
             filter_bits = filter_expr.split(LOOKUP_SEP)
             field_name = filter_bits.pop(0)
-            filter_type = 'exact'
 
             if field_name not in self.fields:
                 # It's not a field we know about. Move along citizen.
                 continue
 
-            # Validate filter types other than 'exact' that are supported by the field type
             try:
-                django_field_name = self.fields[field_name].attribute
-                django_field = self._meta.object_class._meta.get_field(django_field_name)
-                if hasattr(django_field, 'field'):
-                    django_field = django_field.field  # related field
-            except FieldDoesNotExist:
-                raise InvalidFilterError("The '%s' field is not a valid field name" % field_name)
-
-            query_terms = django_field.get_lookups().keys()
-            if len(filter_bits) and filter_bits[-1] in query_terms:
-                filter_type = filter_bits.pop()
-
-            try:
+                filter_type = self.resolve_filter_type(field_name, filter_bits, 'exact')
                 lookup_bits = self.check_filtering(field_name, filter_type, filter_bits)
             except InvalidFilterError:
                 if ignore_bad_filters:
@@ -2109,8 +2140,7 @@ class BaseModelResource(Resource):
                     raise
             value = self.filter_value_to_python(value, field_name, filters, filter_expr, filter_type)
 
-            db_field_name = LOOKUP_SEP.join(lookup_bits)
-            qs_filter = "%s%s%s" % (db_field_name, LOOKUP_SEP, filter_type)
+            qs_filter = LOOKUP_SEP.join(lookup_bits)
             qs_filters[qs_filter] = value
 
         return dict_strip_unicode_keys(qs_filters)
@@ -2260,6 +2290,7 @@ class BaseModelResource(Resource):
         lookup parameters that can find them in the DB
         """
         lookup_kwargs = {}
+        kwargs = deepcopy(kwargs)
 
         # Handle detail_uri_name specially
         if self._meta.detail_uri_name in kwargs:
