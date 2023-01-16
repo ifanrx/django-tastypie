@@ -1,4 +1,3 @@
-from __future__ import unicode_literals
 import warnings
 from django.core.exceptions import ImproperlyConfigured
 from django.http import HttpResponse, HttpResponseBadRequest
@@ -62,10 +61,10 @@ class Api(object):
         If present, unregisters a resource from the API.
         """
         if resource_name in self._registry:
-            del(self._registry[resource_name])
+            del self._registry[resource_name]
 
         if resource_name in self._canonicals:
-            del(self._canonicals[resource_name])
+            del self._canonicals[resource_name]
 
     def canonical_resource_for(self, resource_name):
         """
