@@ -54,3 +54,51 @@ if django.VERSION < (2, 2):
     from django.utils.encoding import force_text as force_str  # noqa
 else:
     from django.utils.encoding import force_str  # noqa
+
+compare_sanitized_tokens = None
+
+# django 4.0
+try:
+    from django.middleware.csrf import _does_token_match, InvalidTokenFormat
+
+    compare_sanitized_tokens = _does_token_match
+except ImportError:
+    pass
+
+# django 3.2
+if compare_sanitized_tokens is None:
+    try:
+        from django.middleware.csrf import _compare_masked_tokens
+
+        compare_sanitized_tokens = _compare_masked_tokens
+
+        class InvalidTokenFormat(Exception):  # noqa
+            pass
+    except ImportError:
+        pass
+
+# django 2.2
+if compare_sanitized_tokens is None:
+    try:
+        from django.middleware.csrf import _unsalt_cipher_token, constant_time_compare
+
+        def compare_sanitized_tokens(request_csrf_token, csrf_token):
+            return constant_time_compare(_unsalt_cipher_token(request_csrf_token),
+                                         _unsalt_cipher_token(csrf_token))
+
+
+        class InvalidTokenFormat(Exception):  # noqa
+            pass
+    except ImportError:  # pragma: no cover
+        raise ImportError("Couldn't find a way to compare csrf tokens safely")  # pragma: no cover
+
+
+def check_token_format(csrf_token):
+    """
+    Handle the pre-4.1 version of sanitizing the token as well as the post-4.0 version of the same.
+    """
+    if django.VERSION < (4, 1):
+        csrf_token = _sanitize_token(csrf_token)
+    else:
+        _check_token_format(csrf_token)
+    return csrf_token
